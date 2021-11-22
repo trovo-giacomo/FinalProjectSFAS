@@ -1,0 +1,74 @@
+<launch>
+    <arg name="map" default="$(find final_project)/maps/map.yaml"/>
+    <arg name="coverage_area_offset" default="-2.5 -2.5 0 0 0 0"/>
+    <arg name="coverage_area_size_x" default="10"/>
+    <arg name="coverage_area_size_y" default="10"/>
+    <arg name="target_x_vel" default="0.5"/>
+    <arg name="target_yaw_vel" default="0.4"/>
+    
+    <arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle, waffle_pi]"/>
+    <arg name="robot_radius" default="0.3"/>
+    <arg name="tool_radius" default="0.3"/>
+    <arg name="cmd_vel_topic" default="/move_base/cmd_vel" />
+    <arg name="odom_topic" default="odom" />
+    <arg name="move_forward_only" default="false"/>
+
+
+    <arg name="initial_pose_x" default="-2.0"/>
+    <arg name="initial_pose_y" default="-0.5"/>
+    <arg name="initial_pose_a" default="0.0"/>
+ 
+  <param name="/use_sim_time" value="true"/>
+ <!-- AMCL -->
+  <include file="$(find turtlebot3_navigation)/launch/amcl.launch">
+    <arg name="initial_pose_x" value="$(arg initial_pose_x)" />
+    <arg name="initial_pose_y" value="$(arg initial_pose_y)" />
+    <arg name="initial_pose_a" value="$(arg initial_pose_a)" />
+  </include>
+
+    <!--Move base flex, using the full_coverage_path_planner-->
+    <node pkg="mbf_costmap_nav" type="mbf_costmap_nav" respawn="false" name="move_base_flex" output="screen" required="true">
+        <param name="tf_timeout" value="1.5"/>
+        <rosparam file="$(find full_coverage_path_planner)/test/full_coverage_path_planner/param/planners.yaml" command="load" />
+        <rosparam file="$(find full_coverage_path_planner)/test/full_coverage_path_planner/param/local_costmap_params.yaml" command="load" />
+
+        <rosparam file="$(find turtlebot3_navigation)/param/costmap_common_params_$(arg model).yaml" command="load" ns="global_costmap" />
+        <rosparam file="$(find turtlebot3_navigation)/param/costmap_common_params_$(arg model).yaml" command="load" ns="local_costmap" />
+        <rosparam file="$(find turtlebot3_navigation)/param/local_costmap_params.yaml" command="load" />
+        <rosparam file="$(find turtlebot3_navigation)/param/global_costmap_params.yaml" command="load" />
+        <rosparam file="$(find turtlebot3_navigation)/param/move_base_params.yaml" command="load" />
+        <rosparam file="$(find turtlebot3_navigation)/param/dwa_local_planner_params_$(arg model).yaml" command="load" />
+        <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
+        <remap from="odom" to="$(arg odom_topic)"/>
+        <param name="DWAPlannerROS/min_vel_x" value="0.0" if="$(arg move_forward_only)" />
+
+        <param name="SpiralSTC/robot_radius" value="$(arg robot_radius)"/>
+        <param name="SpiralSTC/tool_radius" value="$(arg tool_radius)"/>
+        <param name="global_costmap/robot_radius" value="$(arg robot_radius)"/>
+        <remap from="odom" to="/odom"/>
+        <remap from="scan" to="/scan"/>
+
+        <remap from="/move_base_flex/SpiralSTC/plan" to="/move_base/SpiralSTC/plan"/>
+        <!--<remap from="/move_base_flex/tracking_pid/interpolator" to="/move_base/TrackingPidLocalPlanner/interpolator"/>-->
+    </node>
+    <!-- Move Base backwards compatibility -->
+    <node pkg="mbf_costmap_nav" type="move_base_legacy_relay.py" name="move_base"/>
+
+    <!--We need a map to fully cover-->
+    <node name="grid_server" pkg="map_server" type="map_server" args="$(arg map)">
+        <param name="frame_id" value="/map"/>
+    </node>
+
+
+
+    <!-- Mobile robot simulator -->
+    <!--<node pkg="mobile_robot_simulator" type="mobile_robot_simulator_node" name="mobile_robot_simulator" output="screen">
+        <param name="publish_map_transform" value="true"/>
+        <param name="publish_rate" value="10.0"/>
+        <param name="velocity_topic" value="/move_base/cmd_vel"/>
+        <param name="odometry_topic" value="/odom"/>
+    </node>-->
+
+    <!-- rviz -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find full_coverage_path_planner)/test/full_coverage_path_planner/fcpp.rviz" />
+</launch>
