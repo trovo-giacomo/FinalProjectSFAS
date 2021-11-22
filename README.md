@@ -27,3 +27,7 @@ $ rosrun final_project wander.py
 or
 
 $ rosrun final_project explore_with_map.py
+
+or
+
+$ rosrun final_project explore_waypoints.py
