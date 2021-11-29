@@ -10,7 +10,7 @@ import tf_conversions
 from tf.transformations import euler_from_quaternion, quaternion_from_euler, quaternion_matrix, concatenate_matrices, translation_matrix
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from std_msgs.msg import Int8, String
-
+from nav_msgs.msg import Odometry
 
 #[(1.13, -1.6, 0.0), (0.0, 0.0, -0.16547, -0.986213798314)],
 #[(0.13, 1.93, 0.0), (0.0, 0.0, -0.64003024, -0.76812292098)]
@@ -40,7 +40,7 @@ def rotate():
     twist.angular.z = fov_camera
     cmd_vel_pub.publish(twist)
     # wait 1 sec
-    state = 3
+    #state = 3
 
 
 def stop():
@@ -50,7 +50,7 @@ def stop():
     #twist.angular.z = 0.0
     cmd_vel_pub.publish(twist)
     #rospy.sleep(3)
-    state = 4
+    #state = 4
 
  
 def goal_pose(pose):  
@@ -79,7 +79,7 @@ def qr_tf_cov_callback(msg):
     
 
 def parse_message():
-    global msg_qr, word, qr_messages
+    global word
     # Read message
     content = str(msg_qr) #.copy()
     
@@ -104,7 +104,7 @@ def parse_message():
     return qr_msg
 
 
-def transInit(realPos1, realPos2, hiddenPos1, hiddenPos2): #give args as numpy arrays
+def transInit2(realPos1, realPos2, hiddenPos1, hiddenPos2): #give args as numpy arrays
     realPosVector=realPos1-realPos2
     hiddenPosVector=hiddenPos1- hiddenPos2
     theta=getRot(realPosVector,hiddenPosVector) #gets angle in radians
@@ -113,6 +113,26 @@ def transInit(realPos1, realPos2, hiddenPos1, hiddenPos2): #give args as numpy a
     rotation = np.array(((c, -s), (s, c)))
     global translation
     translation = realPos1- rotation.dot(hiddenPos1)
+
+def transInit(realPos1, realPos2, hiddenPos1, hiddenPos2): #give args as numpy arrays
+    A = np.array([[hiddenPos1[0], -hiddenPos1[1], 1 ,0],
+                  [hiddenPos1[1], hiddenPos1[0], 0 ,1],
+                  [hiddenPos2[0], -hiddenPos2[1], 1 ,0],
+                  [hiddenPos2[1], hiddenPos2[0], 0 ,1]])
+    b = np.array([realPos1[0], realPos1[1], realPos2[0], realPos2[1]])
+    x = np.dot(np.linalg.inv(A),b)
+    #print(A)
+    #print(b)
+    print(x)
+    global rotation
+    c = x[0]
+    s = x[1]
+    xT = x[2]
+    yT = x[3]
+    rotation = np.array(((c, -s), (s, c)))
+    global translation
+    translation = np.array([xT,yT])
+
 
 def hidden2real(hidden):
     global rotation
@@ -136,9 +156,28 @@ def getRot(a,b):
     rotAngle= math.acos((math.pow(lenA,2)+math.pow(lenB,2) - math.pow(lenC,2))/(2*lenA*lenB))
     return rotAngle
 
+def go_to_world(pose_world,pose): 
+    global client
+    # add to the pose an offset
+    #observe_offset_scale_x = 0.25
+    observe_offset_scale_x = 0.75
+    #observe_offset_scale_y = 0.8
+    observe_offset_scale_y = 1
+    new_x =   pose_world[0][0] - observe_offset_scale_x * np.sign(pose_world[0][0]-pose[0][0])
+    new_y = pose_world[0][1] - observe_offset_scale_y * np.sign(pose_world[0][1]-pose[0][1])
+    pose_world2 = [(new_x, new_y, pose_world[0][2]),  (pose_world[1][0], pose_world[1][1], pose_world[1][2], pose_world[1][3])]  
+    goal = goal_pose(pose_world2)
+    # go to observe point
+    client.send_goal(goal)
+    client.wait_for_result()
+    rospy.sleep(5)
 
+def odom_callbak(msg):
+    o_pose = msg.pose.pose
+    global odo_pose
+    odo_pose = [(o_pose.position.x,o_pose.position.y,o_pose.position.z),(o_pose.orientation.x,o_pose.orientation.y,o_pose.orientation.z,o_pose.orientation.w)]
 if __name__ == '__main__':
-
+    initQR = True
     rospy.init_node('explore_waypoints')
     rate = rospy.Rate(1)
     ob_postion_relative = PoseWithCovarianceStamped()
@@ -148,6 +187,7 @@ if __name__ == '__main__':
     #qr_obj_pos = rospy.Subscriber('visp_auto_tracker/object_position', PoseStamped, qr_tf_callback)
     qr_obj_pos_cov = rospy.Subscriber('visp_auto_tracker/object_position_covariance', PoseWithCovarianceStamped, qr_tf_cov_callback)
     qr_msg = rospy.Subscriber('visp_auto_tracker/code_message', String, qr_msg_callback)
+    odom = rospy.Subscriber('odom', Odometry, odom_callbak)
     client = actionlib.SimpleActionClient('move_base', MoveBaseAction) 
     client.wait_for_server()
     state = 1
@@ -156,11 +196,13 @@ if __name__ == '__main__':
     rotations = 12
     idx_rotations = 0
     msg_qr = ""
+    consecutive_qr = 0
     previousMsg = {}
+    previousMsg["id"] = -1
     ob_postion_relative = PoseWithCovarianceStamped
     num_period_steady = 0
     
-    while not rospy.is_shutdown():
+    while (not rospy.is_shutdown() and state != 99):
         if(state==1):
             print(" 1 - Go to waypoint "+str(idx_waypoints))
             pose = waypoints[idx_waypoints]
@@ -168,7 +210,8 @@ if __name__ == '__main__':
             client.send_goal(goal)
             client.wait_for_result()
             idx_waypoints = (idx_waypoints +1) % len(waypoints) # circular increment
-            state+=1
+            state+=2
+            rate.sleep()
         elif(state == 2):
             print(" 2 - rotate: "+str(idx_rotations)+"/"+str(rotations))
             if(idx_rotations < rotations):
@@ -176,62 +219,85 @@ if __name__ == '__main__':
                 num_period_steady = 0
                 rotate() # rotate 30 degree
                 idx_rotations+=1
+                state = 3
             else:
                 print("No more rotations needed go to next waypoint")
+                idx_rotations = 0
                 state=1 # no enough qr found go to next waypoint
         elif(state == 3):
                 # stop and loo for qr code
                 print(" 3 - Stop")
                 stop()
+                # check if I'm rotating in a waypoint or infront of a QR code
+                if(initQR):
+                    # I'm at the beginning of the script so - go to check if I see new QR codes
+                    state = 4
+                else:
+                    # I'm looking for the new QR code - second part of the program
+                    state = 14
         elif(state == 4):
-            print(" 4 - look for QR code period "+str(num_period_steady)+"/3")
+            print(" 4 - look for QR code period "+str(num_period_steady)+"/3 - same consecutive  QR: "+str(consecutive_qr))
             if(num_period_steady > 3):
                 print(" Continue to rotate")
                 state = 2 # continue to rotate
             # look for qr code
+            idx_rotations = 0
             obj_msg = {}
+            obj_msg["id"] = -1
             if(status_qr == 3):
+                consecutive_qr += 1
                 obj_msg = parse_message()
-            print("prev: "+str(previousMsg) + "current: "+str(obj_msg))
-            if(status_qr == 3 and previousMsg != obj_msg and num_period_steady >1):
-                print("Got new QR code - get position in the world")
-                # qr code detected and it is different from the previous one
-                # get position realtive prosition from 'ob_postion_relative'
-                pose_camera = [ob_postion_relative.pose.position.x, ob_postion_relative.pose.position.y, ob_postion_relative.pose.position.z, 1];
-                previousMsg = obj_msg
-                try:
-                    # look up for the transformation between camera and odometry
-                    (trans,rot) = listener.lookupTransform('/odom', '/camera_optical_link', rospy.Time(0))
-                    # apply the transformation
-                    t = translation_matrix(trans)
-                    matrix_rot = quaternion_matrix(rot)
-                    T_odomo_camera = concatenate_matrices(t,matrix_rot)
-                    p_qr = T_odomo_camera.dot(pose_camera)
-                    #print(p_qr)
-                    #print(msg_qr)
-                    # update number of qr code seen
-                    nr_qr_found+=1
-                    state = 5  # go to check if I need to proceed on or stop
-                    obj_msg["pos_w"] = [p_qr[0], p_qr[1]] 
-                    pos_worlds.append([p_qr[0], p_qr[1]])
-                    print(pos_worlds)
+            else:
+                consecutive_qr = 0
+            #print("prev: "+str(previousMsg) + "current: "+str(obj_msg))
+            #if(status_qr == 3 and previousMsg["id"] != obj_msg["id"] and consecutive_qr >2):
+            if(status_qr == 3 and consecutive_qr >2):
+                new_qr = True
+                for e in qr_messages:
+                    if(e["id"] == obj_msg["id"]):
+                        new_qr = False
+                        break
+                    else:
+                        continue
+                if(new_qr):
+                    print("Got new QR code - get position in the world")
+                    # qr code detected and it is different from the previous one
+                    # get position realtive prosition from 'ob_postion_relative'
+                    pose_camera = [ob_postion_relative.pose.position.x, ob_postion_relative.pose.position.y, ob_postion_relative.pose.position.z, 1];
+                    previousMsg = obj_msg
+                    consecutive_qr = 0
+                    try:
+                        # look up for the transformation between camera and odometry
+                        (trans,rot) = listener.lookupTransform('/odom', '/camera_optical_link', rospy.Time(0))
+                        # apply the transformation
+                        t = translation_matrix(trans)
+                        matrix_rot = quaternion_matrix(rot)
+                        T_odomo_camera = concatenate_matrices(t,matrix_rot)
+                        p_qr = T_odomo_camera.dot(pose_camera)
+                        #print(p_qr)
+                        #print(msg_qr)
+                        # update number of qr code seen
+                        nr_qr_found+=1
+                        state = 5  # go to check if I need to proceed on or stop
+                        obj_msg["pos_w"] = [p_qr[0], p_qr[1]] 
+                        pos_worlds.append([p_qr[0], p_qr[1]])
+                        print(pos_worlds)
 
-                    # append input message to the list of seen qr codes
-                    qr_messages.append(obj_msg)
-                    # Assign letter to position of id
-                    word = word[:obj_msg["id"]-1] + obj_msg["L"] + word[obj_msg["id"]:]
+                        # append input message to the list of seen qr codes
+                        qr_messages.append(obj_msg)
+                        # Assign letter to position of id
+                        word = word[:obj_msg["id"]-1] + obj_msg["L"] + word[obj_msg["id"]:]
 
-                    # Count number of missing letters (-)
-                    #missing_values = int(word.count('-'))
-                    print("QR code met until now")
-                    print(qr_messages)
-                    print("word:"+word)
-                except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-                    print("Error in the listener lookup transformations")
+                        print("QR code met until now")
+                        print(qr_messages)
+                        print("word:"+word)
+                    except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                        print("Error in the listener lookup transformations")
             num_period_steady += 1
         elif(state == 5):
             print(" 5 - Check if 2 qr code found: "+str(nr_qr_found)+"/2")
             if(nr_qr_found == 2):
+                initQR = False
                 print("Find hidden frame")
                 state = 11
             else:
@@ -240,6 +306,9 @@ if __name__ == '__main__':
         elif(state == 10):
             print(" 10 - Stopping")
             stop()
+            print("\nFinal word: "+word)
+            rospy.shutdown()
+            state = 99
             break
         elif(state==11):
             print("11 - Get hidden frame from the first two qr codes")
@@ -251,11 +320,53 @@ if __name__ == '__main__':
             transInit(posW1, posW2, posH1, posH2)
             state=12
         elif(state == 12):
+            print("Cheking overall number of qr codes: "+str(len(qr_messages))+"/5")
+            if(len(qr_messages) == 5):
+                print("All QR codes found")
+                state = 10
             print("12 - transfrom from hidden 2 world")
             next_pose = hidden2real(qr_messages[-1]["pos_n"])
             print("Next pose in the world")
             print(next_pose)
-            state = 10
+            state = 13
+        elif(state == 13):
+            print("13 - go to next QR code: "+str(next_pose))
+            next_p = [(next_pose[0], next_pose[1], 0.0),(0.0, 0.0, 0.0, 0.0)]
+            go_to_world(next_p,odo_pose)
+            state = 14
+        elif(state == 14):
+            print("14 - check if I see a QR code and parse data if so")
+            rate.sleep()
+            if(status_qr == 3 or not msg_qr == ""):
+                obj_msg = parse_message()
+                print(obj_msg)
+                new_qr = True
+                for e in qr_messages:
+                    if(e["id"] == obj_msg["id"]):
+                        new_qr = False
+                        break
+                    else:
+                        continue
+                if(new_qr):
+                    print("Found: "+str(obj_msg))
+                    # append input message to the list of seen qr codes
+                    qr_messages.append(obj_msg)
+                    # Assign letter to position of id
+                    word = word[:obj_msg["id"]-1] + obj_msg["L"] + word[obj_msg["id"]:]
+
+                    print("QR code met until now")
+                    print(qr_messages)
+                    print("word:"+word)
+                    idx_rotations = 0
+                    state = 12
+                else:
+                    print("QR code already present - continue to look around")
+                    state = 2
+            else:
+                print("No QR found")
+                state = 2
+        else:
+            break
         #print("Nex loop")
         rate.sleep()
     print("Program terminated")
