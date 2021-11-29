@@ -1,4 +1,9 @@
-# FinalProjectSFAS
+# FinalProjectSFAS - Fall 2021
+Group 1
+Thorbjørn Pihl - s173851
+Leila Sedighi - s200084
+Giacomo Trovò - s202447
+Anna Grillenberger - s213637
 
 Commands to  start the simulation:
 
@@ -20,14 +25,6 @@ Commands to import the map
 
 $ roslaunch final_project navigation.launch
 
-Commands to start randmoly navigating
-
-$ rosrun final_project wander.py
-
-or
-
-$ rosrun final_project explore_with_map.py
-
-or
+Commands to start the program
 
 $ rosrun final_project explore_waypoints.py
